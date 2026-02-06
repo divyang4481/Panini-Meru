@@ -31,7 +31,8 @@ def run_comparison():
 
     # 2. PMeru Model (The "After")
     # Load Weights
-    run_dir = "./output/production_v1_light/final_components"
+    # Run Directory updated for v1.1
+    run_dir = "./output/v1.1_final/final_components"
     prime_dim = 128
     hidden_size = raw_model.config.hidden_size
 
