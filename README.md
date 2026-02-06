@@ -13,6 +13,15 @@ This repo is designed for **training on a laptop GPU (~6GB VRAM)** using QLoRA +
 
 ---
 
+## v1.1 Release Features
+
+- **Deep Fusion**: Prime Stream observes Layer 12 (middle) of the base model, preventing "Lazy Bureaucrat".
+- **Auxiliary Loss**: Forces the specialized memory to predict structure, ensuring it aids generation.
+- **KV-Cache Support**: Full support for `past_key_values` for faster inference.
+- **Composite Tags**: Event model tracks both Risk and Action types simultaneously.
+
+---
+
 ## The Core Problem: Validity vs. Fluency
 
 Standard LLMs (Real Stream) are probabilistic: they write "what sounds good."  
@@ -191,9 +200,11 @@ python -m src.pmeru.train.train_text \
   --run_name production_v1 \
   --steps 2000 \
   --seq_len 2048 \
-  --prime_dim 256 \
+  --prime_dim 128 \
   --checkpoint_every 200 \
-  --gradient_accumulation_steps 16
+  --gradient_accumulation_steps 16 \
+  --injection_layer 12 \
+  --aux_loss_weight 0.5
 ```
 
 ### 3) Monitoring

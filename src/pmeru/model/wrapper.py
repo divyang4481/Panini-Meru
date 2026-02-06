@@ -30,35 +30,18 @@ class PMeruConfig(PretrainedConfig):
 
 
 class PMeruModel(nn.Module):
-    """
-    PMeru Wrapper - Fuses the Real Stream (Transformer) with Prime Stream (Memory).
-
-    Architecture Flow:
-    1. Base Model Forward -> Hidden States (Pre-Norm)
-    2. Prime Memory Forward -> Memory Features + New State
-    3. Gated Mixing -> Mixed Hidden States
-    4. Base Model Final Norm (Cached) -> Normed States
-    5. Base Model LM Head (Cached) -> Logits
-    """
-
     def __init__(self, config: PMeruConfig, base_model, prime_memory, mixer):
         super().__init__()
         self.config = config
         self.base_model = base_model
-
-        # External components
         self.prime_memory = prime_memory
         self.mixer = mixer
 
-        # --- CACHE LAYERS ---
-        # Instead of searching every forward pass, identify them once.
-        # 1. Output Head
+        # v1.1 NEW: Structure Head for Aux Loss
+        self.struct_head = nn.Linear(config.prime_mem_dim, config.num_struct_tags)
+
+        # Cache Layers
         self.lm_head = self.base_model.get_output_embeddings()
-
-        # 2. Final Norm
-        # Different architectures name it differently.
-        self.final_norm = None
-
         # Common patterns:
         if hasattr(self.base_model, "model") and hasattr(self.base_model.model, "norm"):
             # Llama / Qwen pattern
@@ -71,15 +54,8 @@ class PMeruModel(nn.Module):
         ):
             # GPT-2 / older style
             self.final_norm = self.base_model.transformer.ln_f
-
-        if self.final_norm is None:
-            print(
-                "WARNING: Could not identify final normalization layer. Mixing might occur post-norm or require manual handling."
-            )
-
-        # 3. Aux Structure Head (v1.1)
-        # Persistent head for auxiliary loss and structure prediction.
-        self.struct_head = nn.Linear(config.prime_mem_dim, config.num_struct_tags)
+        else:
+            self.final_norm = getattr(self.base_model, "norm", None)
 
     def forward(
         self,
@@ -92,86 +68,80 @@ class PMeruModel(nn.Module):
         past_key_values=None,
         **kwargs
     ):
-        """
-        Args:
-            input_ids: [B, T] - Token IDs
-            struct_tags: [B, T] - Structural Tags (for Prime Stream)
-            prime_state: [1, B, PrimeDim] - Initial state for the Memory (optional)
-            labels: [B, T] - Next token labels for training
-
-        Returns dict:
-            loss (optional): CrossEntropy loss if labels provided
-            logits: [B, T, VocabSize]
-            prime_state: [1, B, PrimeDim] - Final state for next chunk
-            mem_features: [B, T, PrimeDim] - Raw memory features (for Aux Loss)
-        """
-
-        # 1. Run Base Model (Real Stream)
-        # We assume output_hidden_states=True gets us the stack
+        # 1. Run Base Model with Hidden States (Deep Fusion)
         outputs = self.base_model(
             input_ids=input_ids,
             attention_mask=attention_mask,
-            past_key_values=past_key_values,
-            use_cache=use_cache,
             output_hidden_states=True,
             return_dict=True,
+            past_key_values=past_key_values,
+            use_cache=use_cache,
             **kwargs
         )
 
-        # DEEP FUSION: Extract Middle Layer
-        # Qwen-1.5B has 24 layers. Layer 12 is ~50% depth.
-        # hidden_states[0] is embeddings. hidden_states[1] is layer 1 ...
-        # So hidden_states[12] is output of 12th block.
-        num_layers = len(outputs.hidden_states)
-        injection_idx = num_layers // 2  # Adaptive middle
-
-        mid_hidden = outputs.hidden_states[injection_idx]  # [B, T, H]
+        # v1.1 NEW: Deep Fusion (Extract Middle Layer)
+        # We feed the raw, early semantics to the memory
+        mid_idx = len(outputs.hidden_states) // 2
+        mid_hidden = outputs.hidden_states[mid_idx]  # [B, T, H]
         last_hidden = outputs.hidden_states[-1]  # [B, T, H]
 
-        # 2. Run Prime Stream (Memory)
-        # Feed MID_HIDDEN to the GRU so it learns from early semantic features.
+        # 2. Run Prime Stream (Memory) using MID_HIDDEN
         if struct_tags is None:
-            # Fallback for inference if tags skipped
             struct_tags = torch.zeros_like(input_ids)
 
         mem_features, new_prime_state, raw_mem_features = self.prime_memory(
-            hidden_states=mid_hidden, struct_tags=struct_tags, state=prime_state
+            hidden_states=mid_hidden,  # <--- Changed from last_hidden
+            struct_tags=struct_tags,
+            state=prime_state,
         )
 
-        # 3. Mix (Fusion)
-        # We mix memory into the LAST hidden state to influence the head
+        # 3. Mix into Final Layer
         mixed_hidden = self.mixer(h=last_hidden, m=mem_features)
 
-        # 4. Final Norm & Head
-        # Apply strict type matching because Mixer might be float32
+        # 4. Norm & Head
         target_dtype = self.lm_head.weight.dtype
-
         if self.final_norm:
-            mixed_normed = self.final_norm(mixed_hidden)
+            mixed_normed = self.final_norm(mixed_hidden).to(target_dtype)
         else:
-            mixed_normed = mixed_hidden
-
-        # Ensure we are ready for the linear head
-        mixed_normed = mixed_normed.to(target_dtype)
+            mixed_normed = mixed_hidden.to(target_dtype)
 
         logits = self.lm_head(mixed_normed)
 
+        # 5. Calculate Losses
         loss = None
+        lm_loss = None
+        struct_loss = None
+
         if labels is not None:
-            # Shift for autoregressive loss
+            # LM Loss
             shift_logits = logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
-
             loss_fct = nn.CrossEntropyLoss()
-            loss = loss_fct(
+            lm_loss = loss_fct(
                 shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1)
             )
 
+            # v1.1 NEW: Aux Structure Loss
+            # Force memory to predict NEXT tag
+            shift_mem = raw_mem_features[..., :-1, :].contiguous()
+            shift_tags = struct_tags[..., 1:].contiguous()
+
+            # Predict
+            tag_logits = self.struct_head(shift_mem)
+            struct_loss = loss_fct(
+                tag_logits.view(-1, self.config.num_struct_tags), shift_tags.view(-1)
+            )
+
+            # Combined Loss (0.5 weight for structure)
+            loss = lm_loss + 0.5 * struct_loss
+
         return {
             "loss": loss,
+            "lm_loss": lm_loss,
+            "struct_loss": struct_loss,
             "logits": logits,
             "prime_state": new_prime_state,
-            "mem_features": raw_mem_features,  # Return RAW GRU features (128 dim) for Aux Loss
+            "mem_features": raw_mem_features,
             "past_key_values": outputs.get("past_key_values", None),
         }
 
@@ -187,14 +157,6 @@ class PMeruModel(nn.Module):
     ):
         """
         Custom generation loop that maintains Prime Memory state.
-
-        Args:
-            input_ids: [B, T] Initial prompt
-            struct_tags: [B, T] Initial structure tags
-            prime_state: [1, B, PrimeDim] Initial memory state
-
-        Returns:
-            full_ids: [B, T + max_new_tokens]
         """
         self.eval()
         curr_ids = input_ids
@@ -240,8 +202,6 @@ class PMeruModel(nn.Module):
             curr_ids = torch.cat([curr_ids, next_token], dim=1)
 
             # Extend tags (naive: repeat 0 or predicted tag? For now 0)
-            # Ideally use struct_head to predict next tag!
-            # Let's try to use struct_head if available
             next_tag_val = 0
             if hasattr(self, "struct_head"):
                 # Predict next tag from memory
@@ -255,8 +215,6 @@ class PMeruModel(nn.Module):
                     (curr_ids.shape[0], 1), dtype=torch.long, device=curr_ids.device
                 )
 
-            # Note: For next iteration (if using cache), we append this new tag to curr_tags
-            # But the next forward pass will only use this *new* tag slice.
             curr_tags = torch.cat([curr_tags, next_tag], dim=1)
 
         return curr_ids

@@ -35,11 +35,7 @@ class WorkflowEvent:
         return f"[{self.step_id}] {self.actor} {self.action} {self.resource} -> {self.status} (Risk: {self.risk_score}){meta_str}\n"
 
     def to_struct_vector(self) -> List[int]:
-        """
-        Converts the event into a structural integer vector.
-        v1.1 FIX: Encodes both RISK and ACTION so the model learns sequences.
-        """
-        # 1. Risk Level (0-3)
+        # 1. Risk Level
         if self.risk_score < 20:
             risk_tag = 0
         elif self.risk_score < 50:
@@ -49,11 +45,10 @@ class WorkflowEvent:
         else:
             risk_tag = 3
 
-        # 2. Action Type (0-9) - Simple hash bucket
+        # 2. Action Type (0-9)
         action_tag = hash(self.action) % 10
 
-        # 3. Composite Tag: (Risk * 10) + Action
-        # Example: Risk 3 (Critical) + Action 5 (PAY) -> Tag 35
+        # v1.1 FIX: Combine Risk + Action
         composite_tag = (risk_tag * 10) + action_tag
 
         return [composite_tag] * len(self.to_text_line())

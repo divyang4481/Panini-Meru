@@ -292,29 +292,10 @@ def train():
             outputs = model(**batch)
             lm_loss = outputs["loss"]
 
-            # --- V1.1 AUXILIARY STRUCTURAL LOSS ---
-            # Predict next structural tag from Prime Memory features
-            # This forces the GRU to track structure independently of the Transformer.
+            # --- V1.1 AUXILIARY STRUCTURAL LOSS (Now in wrapper.py) ---
 
-            # 2. Get Features
-            mem_features = outputs["mem_features"]  # [B, T, PrimeDim]
-            struct_tags = batch["struct_tags"]  # [B, T]
-
-            # 3. Shift & Predict
-            # We want Mem[t] to predict Tag[t+1]
-            shift_mem = mem_features[..., :-1, :].contiguous()
-            shift_tags = struct_tags[..., 1:].contiguous()
-
-            tag_logits = model.struct_head(shift_mem)  # [B, T-1, MaxTags]
-
-            loss_fct_struct = torch.nn.CrossEntropyLoss()
-            # Flatten
-            struct_loss = loss_fct_struct(
-                tag_logits.view(-1, args.max_tags), shift_tags.view(-1)
-            )
-
-            # 4. Combine
-            total_loss = lm_loss + (args.aux_loss_weight * struct_loss)
+            # Loss is already calculated in model.forward
+            total_loss = outputs["loss"]
 
             accelerator.backward(total_loss)
 
@@ -343,7 +324,19 @@ def train():
                 running_loss = 0.0
 
                 if accelerator.is_local_main_process:
-                    progress_bar.set_postfix(loss=avg_loss)
+                    # Retrieve split losses
+                    current_lm = outputs.get("lm_loss", 0)
+                    current_struct = outputs.get("struct_loss", 0)
+                    if isinstance(current_lm, torch.Tensor):
+                        current_lm = current_lm.item()
+                    if isinstance(current_struct, torch.Tensor):
+                        current_struct = current_struct.item()
+
+                    progress_bar.set_postfix(
+                        loss=avg_loss,
+                        lm=f"{current_lm:.2f}",
+                        auc=f"{current_struct:.2f}",
+                    )
 
                     save_metrics(
                         {
