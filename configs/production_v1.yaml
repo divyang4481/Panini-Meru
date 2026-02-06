@@ -1,0 +1,19 @@
+
+# Production Training Config
+run_name: production_run_v0.1
+model_name: Qwen/Qwen2.5-1.5B-Instruct
+
+# Data
+seq_len: 2048 # Increased for better context
+batch_size: 1
+gradient_accumulation_steps: 16 # Effective batch size 16
+
+# Training
+steps: 2000 # Approx 1 epoch depending on dataset size
+checkpoint_every: 200
+prime_dim: 256 # Increased capacity
+
+# Optimization
+learning_rate: 2e-4
+lora_r: 32
+lora_alpha: 64

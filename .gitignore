@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Env
+.venv
+venv/
+ENV/
+env/
+.env
+
+# PyTorch / HF
+*.pt
+*.pth
+*.bin
+*.safetensors
+.cache/
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# Project Outputs
+output/
+checkpoints/
+logs/
+metrics.jsonl
+
+# Data
+data/
+*.db
+*.sqlite
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Additional PMeru Artifacts
+*.pkl
+wandb/
+tmp/
+scripts/__pycache__/
+src/pmeru/__pycache__/
