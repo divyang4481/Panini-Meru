@@ -213,6 +213,7 @@ def train():
         prime_mem_dim=args.prime_dim,
         num_struct_tags=args.max_tags,
         injection_layer_index=args.injection_layer,
+        aux_loss_weight=args.aux_loss_weight,
     )
     model = PMeruModel(config, base_model, prime_memory, mixer)
 

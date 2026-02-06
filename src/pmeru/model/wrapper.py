@@ -81,7 +81,9 @@ class PMeruModel(nn.Module):
 
         # v1.1 NEW: Deep Fusion (Extract Middle Layer)
         # We feed the raw, early semantics to the memory
-        mid_idx = len(outputs.hidden_states) // 2
+        num_layers = len(outputs.hidden_states)
+        mid_idx = getattr(self.config, "injection_layer_index", num_layers // 2)
+
         mid_hidden = outputs.hidden_states[mid_idx]  # [B, T, H]
         last_hidden = outputs.hidden_states[-1]  # [B, T, H]
 
@@ -132,8 +134,9 @@ class PMeruModel(nn.Module):
                 tag_logits.view(-1, self.config.num_struct_tags), shift_tags.view(-1)
             )
 
-            # Combined Loss (0.5 weight for structure)
-            loss = lm_loss + 0.5 * struct_loss
+            # Combined Loss (Configurable weight)
+            weight = getattr(self.config, "aux_loss_weight", 0.5)
+            loss = lm_loss + weight * struct_loss
 
         return {
             "loss": loss,
