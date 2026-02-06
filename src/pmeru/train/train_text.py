@@ -31,6 +31,44 @@ def save_metrics(metrics, path):
         f.write(json.dumps(metrics) + "\n")
 
 
+def save_args(args, path):
+    with open(path, "w") as f:
+        json.dump(vars(args), f, indent=4)
+
+
+def update_metadata(path, step, loss=None):
+    """Updates a compact metadata file for robust resumption tracking."""
+    data = {"last_step": step, "last_loss": loss, "timestamp": time.time()}
+    with open(path, "w") as f:
+        json.dump(data, f)
+
+
+def get_dataset_and_loader(args, tokenizer, accelerator, current_step=0):
+    """
+    Creates the dataset and dataloader, handling batch skipping for resumption.
+    """
+    # Calculate how many batches to skip based on global step
+    # We need to skip: Step * GradAccum * BatchSize (if loader yields items)
+    # But wait, DataLoader yields BATCHES.
+    # Total Batches Processed = Step * GradAccum
+    skip_batches = current_step * args.gradient_accumulation_steps
+
+    logger.info(f"Preparing dataset. Resumption: Skipping {skip_batches} batches.")
+
+    dataset = TextStreamDataset(
+        tokenizer,
+        seq_len=args.seq_len,
+        skip_batches=skip_batches,
+        # TODO: Pass struct_tag_mode to dataset if we implement options in TextStreamDataset
+        # For now, TextStreamDataset uses StructTagger default.
+    )
+
+    dataloader = DataLoader(dataset, batch_size=args.batch_size)
+    dataloader = accelerator.prepare(dataloader)
+
+    return dataloader
+
+
 def train():
     parser = argparse.ArgumentParser()
     parser.add_argument("--run_name", type=str, default="default_run")
@@ -48,6 +86,13 @@ def train():
         default=None,
         help="Path to checkpoint folder to resume from",
     )
+    parser.add_argument(
+        "--struct_tag_mode",
+        type=str,
+        default="simple",
+        choices=["simple", "spacy", "none"],
+        help="Mode for structural tags: 'simple' (indent+bracket), 'spacy' (dependency), 'none' (zeros)",
+    )
     args = parser.parse_args()
 
     set_seed(42)
@@ -56,6 +101,10 @@ def train():
     run_dir = os.path.join(args.output_dir, args.run_name)
     os.makedirs(run_dir, exist_ok=True)
     metrics_path = os.path.join(run_dir, "metrics.jsonl")
+    metadata_path = os.path.join(run_dir, "metadata.json")
+
+    # Save Args for reproducibility
+    save_args(args, os.path.join(run_dir, "training_args.json"))
 
     # IMPORTANT: Force fp16 mixed precision for 6GB VRAM safety
     accelerator = Accelerator(
@@ -118,12 +167,7 @@ def train():
     )
     model = PMeruModel(config, base_model, prime_memory, mixer)
 
-    # 4. Data
-    # Calculate skip_batches if resuming
-    skip_batches = 0
-    start_step = 0
-
-    # 5. Optimizer
+    # 4. Optimizer
     trainable_params = [
         *filter(lambda p: p.requires_grad, model.base_model.parameters()),
         *model.prime_memory.parameters(),
@@ -131,58 +175,62 @@ def train():
     ]
     optimizer = torch.optim.AdamW(trainable_params, lr=2e-4)
 
-    # Check resumption BEFORE dataset creation if possible, but we need variables loaded
-    # Accelerator load_state loads optimizer and RNG states
-
-    # Prepare first
-    # Note: text_stream dataset is an iterable, logic for skipping must be handled carefully.
-
+    # Prepare model/opt before dataloader
     model, optimizer = accelerator.prepare(model, optimizer)
 
-    # Determine start step from checkpoint or arg
+    # 5. Handle Resumption
+    start_step = 0
     if args.resume_from_checkpoint:
         logger.info(f"Resuming from checkpoint: {args.resume_from_checkpoint}")
         accelerator.load_state(args.resume_from_checkpoint)
 
-        # We need to know which step we were at.
-        # Usually accelerator saves a 'custom_checkpoint' or we infer from dir name?
-        # Standard: user provides "step_X" folder.
-        try:
-            # Assumes folder name ends with step number or we track it in a meta file
-            # Let's check for a training_state.json if we created one, or parse folder name
-            dirname = os.path.basename(args.resume_from_checkpoint.rstrip("/\\"))
-            if "step_" in dirname:
-                step_str = dirname.split("_")[-1]
-                start_step = int(step_str)
-                logger.info(f"Resuming from step {start_step}")
-            else:
+        # Robust Step Recovery
+        # Strategy 1: Check metadata.json in the checkpoint folder
+        meta_file = os.path.join(args.resume_from_checkpoint, "metadata.json")
+        if os.path.exists(meta_file):
+            try:
+                with open(meta_file, "r") as f:
+                    meta = json.load(f)
+                    start_step = meta.get("last_step", 0)
+                    logger.info(f"Recovered step {start_step} from metadata.json")
+            except:
+                pass
+
+        # Strategy 2: Check global metadata.json in run dir
+        if start_step == 0 and os.path.exists(metadata_path):
+            try:
+                with open(metadata_path, "r") as f:
+                    meta = json.load(f)
+                    start_step = meta.get("last_step", 0)
+                    logger.info(f"Recovered step {start_step} from run metadata")
+            except:
+                pass
+
+        # Strategy 3: Parse dirname
+        if start_step == 0:
+            try:
+                dirname = os.path.basename(args.resume_from_checkpoint.rstrip("/\\"))
+                if "step_" in dirname:
+                    step_str = dirname.split("_")[-1]
+                    start_step = int(step_str)
+                    logger.info(f"Recovered step {start_step} from directory name")
+            except:
                 logger.warning(
-                    "Could not infer step from checkpoint name. Starting step count at 0 usually wrong for scheduling."
+                    "Could not determine start step. Starting from 0 (Safe but potentially redundant)."
                 )
-        except:
-            pass
 
-        # Update skip_batches
-        # skip_batches = start_step * gradient_accumulation_steps * batch_size ??
-        # The dataset is iterated by DataLoader. DataLoader yields batches.
-        # One valid step = grad_accum * batch iterations.
-        # Total batches consumed = start_step * args.gradient_accumulation_steps
-        skip_batches = start_step * args.gradient_accumulation_steps
-
-    # Create dataset with skipping
-    dataset = TextStreamDataset(
-        tokenizer, seq_len=args.seq_len, skip_batches=skip_batches
+    # 6. Data Layout
+    # Create dataloader *after* knowing the start step
+    dataloader = get_dataset_and_loader(
+        args, tokenizer, accelerator, current_step=start_step
     )
-    dataloader = DataLoader(dataset, batch_size=args.batch_size)
-    dataloader = accelerator.prepare(dataloader)
 
-    logger.info("Starting training...")
+    logger.info("Starting training loop...")
     model.train()
 
     running_loss = 0.0
     global_step = start_step
 
-    update_progress_bar = None
     if accelerator.is_local_main_process:
         progress_bar = tqdm(
             total=args.steps, initial=global_step, desc="Training", unit="step"
@@ -216,11 +264,9 @@ def train():
                     if global_step > start_step
                     else running_loss
                 )
-                # running_loss accumulates loss.item() (mean of batch).
-                # Logic: running_loss += loss.item() (happens every microbatch)
-                # In 10 Global Steps, we run 10 * 16 = 160 microbatches.
-                # So we should divide by 160.
-                avg_loss = running_loss / (10 * args.gradient_accumulation_steps)
+
+                # Reset running loss roughly
+                running_loss = 0.0
 
                 if accelerator.is_local_main_process:
                     progress_bar.set_postfix(loss=avg_loss)
@@ -234,7 +280,8 @@ def train():
                         metrics_path,
                     )
 
-                running_loss = 0.0
+                    # Update metadata on disk so if we crash we know where we were
+                    update_metadata(metadata_path, global_step, avg_loss)
 
             # Generate Sample (Qualitative Validation)
             if global_step % 50 == 0 and accelerator.is_local_main_process:
@@ -267,6 +314,9 @@ def train():
                 tqdm.write(f"Saving checkpoint at step {global_step}")
                 save_path = os.path.join(run_dir, f"step_{global_step}")
                 accelerator.save_state(save_path)
+
+                # Write metadata into the checkpoint folder too for self-contained portability
+                update_metadata(os.path.join(save_path, "metadata.json"), global_step)
 
             if global_step >= args.steps:
                 break

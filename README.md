@@ -42,8 +42,49 @@ We physically fuse two distinct "brains" together:
     - By feeding "Structural Tags" (indentation, scope) explicitly into the Prime Stream, we force the model to be aware of the _valid_ syntax tree at all times.
     - The **Gate** mechanism allows the "Bureaucrat" to override the "Artist" when a rule is about to be broken (e.g., closing a parenthesis that wasn't opened).
 
-3.  **Low-VRAM Efficiency**:
+### 3. Low-VRAM Efficiency
+
     - We get the behavior of a massive long-context model while running on a **6GB Laptop GPU**, because we don't need a massive KV cache for the structural long-range dependencies.
+
+## Concrete Example: "The Lost Indentation"
+
+Imagine generating a Python function that is 5,000 tokens long (longer than the context window of a small model).
+
+**Scenario**: We are deep inside a nested loop in `process_data()`.
+
+**Input Context**:
+
+```python
+def process_data(items):
+    if validation_passed:
+        for item in items:
+            try:
+                # ... [4000 tokens of complex logic] ...
+                # The model has lost the start of the function from its window.
+```
+
+#### Without Panini-Meru (Standard LLM)
+
+The model forgets it is inside a `try/except` block because the `try:` keyword token fell out of the context window.
+**Output (Failure)**:
+
+```python
+    return result  # ❌ ERROR: SyntaxError. Dedented too early.
+                   # It forgot it needs an 'except' block or to stay indented.
+```
+
+#### With Panini-Meru (Adelic)
+
+The **Prime Stream** (GRU) has maintained a state vector that encodes: `depth=4`, `scope=try_block`. This vector persists even if the token history is gone.
+Input to Transformer: `[Token Embeddings]` + `[Prime Memory: "EXPECT_EXCEPT_BLOCK"]`
+**Output (Success)**:
+
+```python
+            except ValueError:  # ✅ SUCCESS: The 'Bureaucrat' forced the 'Artist'
+                log_error()     # to close the block correctly.
+```
+
+---
 
 ## Hardware target
 
@@ -158,3 +199,45 @@ python -m src.pmeru.train.train_text \
 ### 3) Monitoring
 
 Open `notebooks/analysis.ipynb` in VS Code to see live loss charts.
+
+---
+
+## 🛠️ Advanced Usage
+
+### Inference: Managing State Across Chunks
+
+The **Adelic** architecture is stateful. Unlike a standard Transformer where you just pass `input_ids`, here you must manage the **Prime State**.
+
+When generating long code (chunk by chunk):
+
+1. **Initial Step**: Pass `prime_state=None`. The model initializes a zero state.
+2. **Next Steps**: The model returns `new_prime_state`. You **must** feed this back into the next forward pass.
+
+```python
+# Pseudo-code for stateful generation
+prime_state = None
+generated_text = ""
+
+for chunk in infinite_stream:
+    # 1. Calculate structural tags for the chunk
+    tags = tagger.get_tags(chunk)
+
+    # 2. Forward pass
+    output = model(input_ids=chunk, struct_tags=tags, prime_state=prime_state)
+
+    # 3. Carry state forward - This is the O(N) memory magic!
+    prime_state = output['prime_state']
+```
+
+### Implementing Custom Data Loaders
+
+We use a streaming dataset architecture. To use your own data:
+
+1. Modify `src/pmeru/data/text_stream.py`.
+2. Ensure your dataset yields a `text` field (or `content`/`code`).
+3. The `TextStreamDataset` class automatically handles:
+   - Tokenization
+   - Structural Tagging (via `StructTagger`)
+   - Alignment of tags to tokens
+
+If you want to use **advanced tags** (e.g., TreeSitter parse depth), modifying `src/pmeru/data/struct_tags.py` is the only place you need to touch. The model is agnostic to _what_ the tags mean, as long as they are integers `< num_struct_tags`.
