@@ -81,17 +81,17 @@ panini-meru/
 
 ```mermaid
 graph TD
-    subgraph Input Processing
+    subgraph InputProcessing ["Input Processing"]
     T[Token Stream] --> Emb[Embedding]
     T --> Tags[Struct Tags]
     end
 
-    subgraph Real Stream ("The Artist - O(N²)")
+    subgraph RealStream ["Real Stream (The Artist - O(N^2))"]
     Emb --> TF[Transformer Block 1..N]
     TF --> H[Hidden States h_t]
     end
 
-    subgraph Prime Stream ("The Bureaucrat - O(N)")
+    subgraph PrimeStream ["Prime Stream (The Bureaucrat - O(N))"]
     Tags --> P[Prime Input]
     State((State S_t-1)) --> GRU[GRU Memory Cell]
     P --> GRU
@@ -99,7 +99,7 @@ graph TD
     GRU --> MEM[Memory Features m_t]
     end
 
-    subgraph Fusion
+    subgraph Fusion ["Fusion"]
     H --> MIX[Gated Mixer]
     MEM --> MIX
 
@@ -108,8 +108,8 @@ graph TD
 
     Out --> LM[LM Head] --> Pred[Next Token]
 
-    style Real Stream fill:#e1f5fe,stroke:#01579b
-    style Prime Stream fill:#fce4ec,stroke:#880e4f
+    style RealStream fill:#e1f5fe,stroke:#01579b
+    style PrimeStream fill:#fce4ec,stroke:#880e4f
     style Fusion fill:#fff3e0,stroke:#ff6f00
 ```
 
