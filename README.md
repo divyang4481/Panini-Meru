@@ -53,36 +53,65 @@ We physically fuse two distinct "brains" together:
 
 ---
 
-## Repository structure
+## Repository Structure
 
+```
 panini-meru/
-├── configs/
-│ ├── train_text_pmeru_ar_1p5b.yaml
-│ ├── train_events_pmeru_ac.yaml
-│ └── dataset.yaml
+├── configs/                    # Hyperparameter configurations
+│   └── production_v1.yaml
 ├── src/
-│ ├── pmeru/
-│ │ ├── model/
-│ │ │ ├── prime_memory.py # recurrent memory module (GRU v0.1)
-│ │ │ ├── mixer.py # gate + layernorm
-│ │ │ └── wrapper.py # HF integration: hidden_states -> mix -> lm_head
-│ │ ├── data/
-│ │ │ ├── text_stream.py # streaming text loader
-│ │ │ ├── struct_tags.py # cheap structural tags (markdown/json/code depth)
-│ │ │ └── event_tokenizer.py # tuple tokenizer for event logs
-│ │ ├── train/
-│ │ │ ├── train_text.py # QLoRA training loop
-│ │ │ ├── train_events.py # compliance training loop
-│ │ │ └── eval_longhaul.py # long-horizon tests (chunked generation)
-│ │ └── utils/
-│ │ ├── seed.py
-│ │ └── logging.py
-├── scripts/
-│ ├── download_text_data.py
-│ ├── event_data_instructions.md
-│ └── run_train.ps1
-├── requirements.txt
-└── README.md
+│   └── pmeru/
+│       ├── model/
+│       │   ├── prime_memory.py # GRU-based Recurrent Memory (The "Bureaucrat")
+│       │   ├── mixer.py        # Gated Residual Mixer (The "Gate")
+│       │   └── wrapper.py      # HuggingFace Model Wrapper
+│       ├── data/
+│       │   ├── text_stream.py  # Streaming Dataset Loader
+│       │   └── struct_tags.py  # Structural Tag extraction
+│       └── train/
+│           └── train_text.py   # Main QLoRA Training Loop
+├── scripts/                    # Utilities and Benchmarks
+│   ├── run_benchmark.py
+│   ├── check_status.py
+│   └── generate_demo.py
+└── output/                     # Model artifacts (Ignored by Git)
+```
+
+## Architecture Diagram (Adelic Dual-Stream)
+
+```mermaid
+graph TD
+    subgraph Input Processing
+    T[Token Stream] --> Emb[Embedding]
+    T --> Tags[Struct Tags]
+    end
+
+    subgraph Real Stream ("The Artist - O(N²)")
+    Emb --> TF[Transformer Block 1..N]
+    TF --> H[Hidden States h_t]
+    end
+
+    subgraph Prime Stream ("The Bureaucrat - O(N)")
+    Tags --> P[Prime Input]
+    State((State S_t-1)) --> GRU[GRU Memory Cell]
+    P --> GRU
+    GRU --> NewState((State S_t))
+    GRU --> MEM[Memory Features m_t]
+    end
+
+    subgraph Fusion
+    H --> MIX[Gated Mixer]
+    MEM --> MIX
+
+    MIX -- "g * h + (1-g) * m" --> Out[Mixed State]
+    end
+
+    Out --> LM[LM Head] --> Pred[Next Token]
+
+    style Real Stream fill:#e1f5fe,stroke:#01579b
+    style Prime Stream fill:#fce4ec,stroke:#880e4f
+    style Fusion fill:#fff3e0,stroke:#ff6f00
+```
 
 ---
 
