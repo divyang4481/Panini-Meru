@@ -57,7 +57,7 @@ def run_longhaul():
     tokenizer = AutoTokenizer.from_pretrained(base_model_name)
 
     # Load PMeru Artifacts
-    run_dir = "./output/production_v1_light/final_components"
+    run_dir = "./output/smoke_test_v1.1/final_components"
     hidden_size = raw_model.config.hidden_size
     prime_dim = 128  # Match config
 
