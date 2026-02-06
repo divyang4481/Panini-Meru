@@ -15,6 +15,8 @@ All notable changes to the **Panini-Meru** project will be documented in this fi
 - **Event Compliance Pipeline (`train_events.py`)**:
   - New training script for structured enterprise logs.
   - Supports synthetic event generation and risk-based tagging.
+- **Composite Event Tags**:
+  - `EventTokenizer` encodes (Risk \* 10 + ActionHash), enabling the Prime Stream to learn complex workflow sequences.
 - **Long-Haul Evaluation**:
   - Added `eval_longhaul.py` to test context retention beyond the transformer's sliding window.
   - Added `model.generate_with_state()` API to support custom generation loops with persistent memory.
@@ -38,6 +40,5 @@ All notable changes to the **Panini-Meru** project will be documented in this fi
 
 ### 🔮 Future Work (v1.2)
 
-- **Composite Event Tags**: Expand `WorkflowEvent` to encode Action Type (Approve/Deny) alongside Risk Level.
 - **KV-Cache Optimization**: Update `generate_with_state` to use the Key-Value cache for faster inference.
 - **Advanced Gating**: Explore dynamic layer selection for injection.

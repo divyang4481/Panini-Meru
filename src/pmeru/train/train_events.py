@@ -69,7 +69,7 @@ def train_events():
 
     # 2. Adelic Components
     hidden_size = model_base.config.hidden_size
-    prime_mem = PrimeMemorySeq(hidden_size, args.prime_dim).cuda()
+    prime_mem = PrimeMemorySeq(hidden_size, args.prime_dim, num_struct_tags=40).cuda()
     mixer = GateMixer(hidden_size, per_channel=args.per_channel_gating).cuda()
 
     config = PMeruConfig(

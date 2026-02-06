@@ -198,7 +198,9 @@ def train():
 
     # 2. Init Prime Stream Components
     hidden_size = base_model.config.hidden_size
-    prime_memory = PrimeMemorySeq(hidden_size, args.prime_dim)
+    prime_memory = PrimeMemorySeq(
+        hidden_size, args.prime_dim, num_struct_tags=args.max_tags
+    )
     mixer = GateMixer(hidden_size)
 
     # NOTE: Keeping Prime/Mixer in float32 for stability, wrapper will handle casting if needed.

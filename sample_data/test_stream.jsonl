@@ -1,0 +1,2 @@
+{"text": "    def sample_func():\n        return True", "meta": "test_indent"}
+{"text": "class Foo:\n    pass\n", "meta": "test_class"}
