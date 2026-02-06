@@ -76,9 +76,12 @@ class EventStreamDataset(IterableDataset):
             # Weighted random risk
             risk = random.choices([10, 40, 70, 95], weights=self.config.risk_probs)[0]
 
-        status = "SUCCESS"
-        if risk > 80:
-            status = random.choice(["FAILED", "DENIED", "PENDING"])
+        # v1.1 Rule: Deterministic Compliance
+        # "If Risk >= 80, Status MUST be DENIED"
+        if risk >= 80:
+            status = "DENIED"
+        else:
+            status = "SUCCESS"
 
         event = WorkflowEvent(
             step_id=f"evt_{step_idx:08d}",

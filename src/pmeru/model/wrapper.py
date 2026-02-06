@@ -168,6 +168,7 @@ class PMeruModel(nn.Module):
             "logits": logits,
             "prime_state": new_prime_state,
             "mem_features": raw_mem_features,  # Return RAW GRU features (128 dim) for Aux Loss
+            "past_key_values": outputs.get("past_key_values", None),
         }
 
     @torch.no_grad()
@@ -194,6 +195,7 @@ class PMeruModel(nn.Module):
         self.eval()
         curr_ids = input_ids
         curr_state = prime_state
+        past_key_values = None
 
         # If no struct tags provided, use zeros
         if struct_tags is None:
@@ -202,13 +204,26 @@ class PMeruModel(nn.Module):
         curr_tags = struct_tags
 
         for _ in range(max_new_tokens):
+            # Optimization: If we have past_key_values, only process the LAST token
+            if past_key_values is not None:
+                model_input_ids = curr_ids[:, -1:]
+                model_struct_tags = curr_tags[:, -1:]
+            else:
+                model_input_ids = curr_ids
+                model_struct_tags = curr_tags
+
             # Forward pass
             outputs = self.forward(
-                input_ids=curr_ids, struct_tags=curr_tags, prime_state=curr_state
+                input_ids=model_input_ids,
+                struct_tags=model_struct_tags,
+                prime_state=curr_state,
+                use_cache=True,
+                past_key_values=past_key_values,
             )
 
             next_token_logits = outputs["logits"][:, -1, :]
             curr_state = outputs["prime_state"]  # Update persistent state
+            past_key_values = outputs["past_key_values"]  # Update KV Cache
 
             # Decode
             if do_sample:
@@ -236,6 +251,8 @@ class PMeruModel(nn.Module):
                     (curr_ids.shape[0], 1), dtype=torch.long, device=curr_ids.device
                 )
 
+            # Note: For next iteration (if using cache), we append this new tag to curr_tags
+            # But the next forward pass will only use this *new* tag slice.
             curr_tags = torch.cat([curr_tags, next_tag], dim=1)
 
         return curr_ids
