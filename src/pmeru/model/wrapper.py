@@ -97,6 +97,7 @@ class PMeruModel(nn.Module):
             loss (optional): CrossEntropy loss if labels provided
             logits: [B, T, VocabSize]
             prime_state: [1, B, PrimeDim] - Final state for next chunk
+            mem_features: [B, T, PrimeDim] - Raw memory features (for Aux Loss)
         """
 
         # 1. Run Base Model (Real Stream)
@@ -109,19 +110,28 @@ class PMeruModel(nn.Module):
             **kwargs
         )
 
-        # Get the output state of the last block (usually pre-final-norm)
+        # DEEP FUSION: Extract Middle Layer
+        # Qwen-1.5B has 24 layers. Layer 12 is ~50% depth.
+        # hidden_states[0] is embeddings. hidden_states[1] is layer 1 ...
+        # So hidden_states[12] is output of 12th block.
+        num_layers = len(outputs.hidden_states)
+        injection_idx = num_layers // 2  # Adaptive middle
+
+        mid_hidden = outputs.hidden_states[injection_idx]  # [B, T, H]
         last_hidden = outputs.hidden_states[-1]  # [B, T, H]
 
         # 2. Run Prime Stream (Memory)
+        # Feed MID_HIDDEN to the GRU so it learns from early semantic features.
         if struct_tags is None:
             # Fallback for inference if tags skipped
             struct_tags = torch.zeros_like(input_ids)
 
-        mem_features, new_prime_state = self.prime_memory(
-            hidden_states=last_hidden, struct_tags=struct_tags, state=prime_state
+        mem_features, new_prime_state, raw_mem_features = self.prime_memory(
+            hidden_states=mid_hidden, struct_tags=struct_tags, state=prime_state
         )
 
         # 3. Mix (Fusion)
+        # We mix memory into the LAST hidden state to influence the head
         mixed_hidden = self.mixer(h=last_hidden, m=mem_features)
 
         # 4. Final Norm & Head
@@ -149,4 +159,9 @@ class PMeruModel(nn.Module):
                 shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1)
             )
 
-        return {"loss": loss, "logits": logits, "prime_state": new_prime_state}
+        return {
+            "loss": loss,
+            "logits": logits,
+            "prime_state": new_prime_state,
+            "mem_features": raw_mem_features,  # Return RAW GRU features (128 dim) for Aux Loss
+        }

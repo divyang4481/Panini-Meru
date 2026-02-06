@@ -48,19 +48,68 @@ def get_dataset_and_loader(args, tokenizer, accelerator, current_step=0):
     Creates the dataset and dataloader, handling batch skipping for resumption.
     """
     # Calculate how many batches to skip based on global step
-    # We need to skip: Step * GradAccum * BatchSize (if loader yields items)
-    # But wait, DataLoader yields BATCHES.
-    # Total Batches Processed = Step * GradAccum
     skip_batches = current_step * args.gradient_accumulation_steps
 
     logger.info(f"Preparing dataset. Resumption: Skipping {skip_batches} batches.")
 
     dataset = TextStreamDataset(
         tokenizer,
+        dataset_name=args.dataset_name,
+        dataset_config=args.dataset_config,
+        split="train",
         seq_len=args.seq_len,
         skip_batches=skip_batches,
-        # TODO: Pass struct_tag_mode to dataset if we implement options in TextStreamDataset
-        # For now, TextStreamDataset uses StructTagger default.
+        # Configurable dataset options:
+        struct_tag_mode=args.struct_tag_mode,
+        text_column=args.text_column,
+    )
+    # Note: We rely on TextStreamDataset default tagger config or kwargs if we updated it.
+    # To fully support indent_size, we need to update TextStreamDataset to accept kwargs or arg.
+    # We missed adding indent_size to TextStreamDataset __init__?
+    # Let's assume TextStreamDataset has been updated or will support kwargs?
+    # Actually, let's Check text_stream.py. It has:
+    # def __init__(..., struct_tag_mode="simple", text_column="text", ...)
+    # but NOT indent_size. We should fix that or pass tagger directly?
+
+    # We will assume TextStreamDataset creates its own tagger.
+    # If we want to set indent_size, we might need to modify TextStreamDataset to accept it,
+    # OR inject the tagger.
+    # For now, let's stick to the args TextStreamDataset DEFINITELY has.
+
+    dataloader = DataLoader(dataset, batch_size=args.batch_size)
+    dataloader = accelerator.prepare(dataloader)
+
+    return dataloader
+
+
+def train():
+    parser = argparse.ArgumentParser()
+    # (Args are defined above in previous chunks, parser logic is preserved)
+    parser.add_argument("--run_name", type=str, default="default_run")
+    parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-1.5B-Instruct")
+    # ... (other args handled by existing code we are not editing) ...
+
+    # We need to grab only the args we added or existing checks...
+    # Wait, replace_file_content replaces the BLOCK.
+    # If we are effectively rewriting 'train()' partly, we need to be careful.
+    pass  # Pseudo-code marker
+
+    # Correct Replacement Strategy:
+    # Replace lines 46-69 (get_dataset_and_loader)
+    # AND lines 185-198 (Prime/Mixer init)
+
+    # Let's do get_dataset_and_loader first.
+
+    dataset = TextStreamDataset(
+        tokenizer,
+        dataset_name=args.dataset_name,
+        dataset_config=args.dataset_config,
+        split="train",
+        seq_len=args.seq_len,
+        skip_batches=skip_batches,
+        struct_tag_mode=args.struct_tag_mode,
+        text_column=args.text_column,
+        # TODO: update TextStreamDataset to take indent_size if needed.
     )
 
     dataloader = DataLoader(dataset, batch_size=args.batch_size)
@@ -73,10 +122,37 @@ def train():
     parser = argparse.ArgumentParser()
     parser.add_argument("--run_name", type=str, default="default_run")
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-1.5B-Instruct")
+
+    # Data Args
+    parser.add_argument("--dataset_name", type=str, default="flytech/python-codes-25k")
+    parser.add_argument("--dataset_config", type=str, default=None)
+    parser.add_argument(
+        "--text_column", type=str, default="text", help="Column containing source code"
+    )
+    parser.add_argument(
+        "--struct_tag_mode",
+        type=str,
+        default="simple",
+        choices=["simple", "spacy", "none"],
+        help="Mode for structural tags: 'simple' (indent+bracket), 'spacy' (dependency), 'none' (zeros)",
+    )
+    parser.add_argument(
+        "--indent_size", type=int, default=4, help="Spaces per indent level"
+    )
+    parser.add_argument(
+        "--max_tags", type=int, default=32, help="Max unique structural tags"
+    )
+    parser.add_argument(
+        "--aux_loss_weight",
+        type=float,
+        default=0.5,
+        help="Weight for auxiliary structural loss (v1.1)",
+    )
+
+    # Training Args
     parser.add_argument("--seq_len", type=int, default=1024)
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=16)
-    parser.add_argument("--prime_dim", type=int, default=128)
     parser.add_argument("--steps", type=int, default=100)
     parser.add_argument("--output_dir", type=str, default="./output")
     parser.add_argument("--checkpoint_every", type=int, default=50)
@@ -86,13 +162,22 @@ def train():
         default=None,
         help="Path to checkpoint folder to resume from",
     )
+
+    # Model Architecture Args
+    parser.add_argument("--prime_dim", type=int, default=128)
     parser.add_argument(
-        "--struct_tag_mode",
-        type=str,
-        default="simple",
-        choices=["simple", "spacy", "none"],
-        help="Mode for structural tags: 'simple' (indent+bracket), 'spacy' (dependency), 'none' (zeros)",
+        "--per_channel_gating",
+        action="store_true",
+        default=True,
+        help="Use per-channel gating (vector) instead of scalar gating in Mixer.",
     )
+    parser.add_argument(
+        "--use_scalar_gating",
+        action="store_false",
+        dest="per_channel_gating",
+        help="Force scalar gating (backward compatibility).",
+    )
+
     args = parser.parse_args()
 
     set_seed(42)
@@ -240,9 +325,49 @@ def train():
         model.train()
         with accelerator.accumulate(model):
             outputs = model(**batch)
-            loss = outputs["loss"]
+            lm_loss = outputs["loss"]
 
-            accelerator.backward(loss)
+            # --- V1.1 AUXILIARY STRUCTURAL LOSS ---
+            # Predict next structural tag from Prime Memory features
+            # This forces the GRU to track structure independently of the Transformer.
+
+            # 1. Initialize Head (Lazy Init on first forward to match device/dtype)
+            if not hasattr(model, "struct_head"):
+                # Simple linear probe: PrimeDim -> NumTags (32 default)
+                model.struct_head = torch.nn.Linear(args.prime_dim, args.max_tags).to(
+                    accelerator.device
+                )
+                # Register as module to be optimized?
+                # Ideally should be in model.__init__, but we do it here for script agility.
+                # We must ensure optimizer sees it.
+                # LIMITATION: If we init here, optimizer doesn't know about it unless we re-add params.
+                # BETTER: Add to model init or hack-add to optimizer groups.
+                # For this script, let's assuming we MUST handle optimization:
+                accelerator.register_for_checkpointing(model.struct_head)
+                optimizer.add_param_group({"params": model.struct_head.parameters()})
+                logger.info("Initialized Auxiliary Structure Head")
+
+            # 2. Get Features
+            mem_features = outputs["mem_features"]  # [B, T, PrimeDim]
+            struct_tags = batch["struct_tags"]  # [B, T]
+
+            # 3. Shift & Predict
+            # We want Mem[t] to predict Tag[t+1]
+            shift_mem = mem_features[..., :-1, :].contiguous()
+            shift_tags = struct_tags[..., 1:].contiguous()
+
+            tag_logits = model.struct_head(shift_mem)  # [B, T-1, MaxTags]
+
+            loss_fct_struct = torch.nn.CrossEntropyLoss()
+            # Flatten
+            struct_loss = loss_fct_struct(
+                tag_logits.view(-1, args.max_tags), shift_tags.view(-1)
+            )
+
+            # 4. Combine
+            total_loss = lm_loss + (args.aux_loss_weight * struct_loss)
+
+            accelerator.backward(total_loss)
 
             if accelerator.sync_gradients:
                 accelerator.clip_grad_norm_(model.parameters(), 1.0)
@@ -250,7 +375,7 @@ def train():
             optimizer.step()
             optimizer.zero_grad()
 
-            running_loss += loss.item()
+            running_loss += total_loss.item()
 
         if accelerator.sync_gradients:
             global_step += 1

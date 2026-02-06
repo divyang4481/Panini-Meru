@@ -21,6 +21,7 @@ class TextStreamDataset(IterableDataset):
         fallback_columns=None,  # List of other columns to try (e.g. ['content', 'code'])
         infinite_loop=False,  # If True, restart dataset when exhausted
         pad_last_batch=False,  # If True, pad the remainder instead of dropping
+        indent_size=4,  # Spaces per indent level
     ):
         self.tokenizer = tokenizer
         self.dataset_name = dataset_name
@@ -31,17 +32,20 @@ class TextStreamDataset(IterableDataset):
         self.struct_tag_mode = struct_tag_mode
         self.infinite_loop = infinite_loop
         self.pad_last_batch = pad_last_batch
+        self.indent_size = indent_size
 
         self.text_column = text_column
         self.fallback_columns = fallback_columns or ["output", "content", "code"]
 
         logger.info(f"Initializing TextStreamDataset: {dataset_name} (split={split})")
-        logger.info(f"  Seq Len: {seq_len}, Tag Mode: {struct_tag_mode}")
+        logger.info(
+            f"  Seq Len: {seq_len}, Tag Mode: {struct_tag_mode}, Indent: {indent_size}"
+        )
         logger.info(f"  Skip Batches: {skip_batches}, Infinite Loop: {infinite_loop}")
 
         # Optimize tagger init
         if self.struct_tag_mode == "simple":
-            self.tagger = StructTagger()
+            self.tagger = StructTagger(indent_size=self.indent_size)
         else:
             self.tagger = None  # 'none' mode or implementation pending
             logger.info("  StructTagger disabled (mode is not 'simple').")

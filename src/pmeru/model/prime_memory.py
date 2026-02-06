@@ -99,5 +99,7 @@ class PrimeMemorySeq(nn.Module):
         # Return to fp16/bf16 to match the rest of the model
         memory_out = memory_out.to(dtype=orig_dtype)
         final_state = final_state.to(dtype=orig_dtype)
+        # Also return raw gru_out (fp16) for auxiliary loss
+        gru_out = gru_out.to(dtype=orig_dtype)
 
-        return memory_out, final_state
+        return memory_out, final_state, gru_out
