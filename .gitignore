@@ -47,7 +47,7 @@ logs/
 metrics.jsonl
 
 # Data
-data/
+/data/
 *.db
 *.sqlite
 
@@ -61,3 +61,6 @@ wandb/
 tmp/
 scripts/__pycache__/
 src/pmeru/__pycache__/
+
+# Internal Docs
+DEVELOPER.md
