@@ -137,10 +137,10 @@ Represent each step as a tuple token:
 
 `event_t = (action_id, state_id, risk_id, actor_id?, channel_id?, region_id?, amount_bucket?)`
 
-**v1.1 Update (Composite Structure):**
-Instead of separate inputs, we compress critical structural info into a single composite tag for the Prime Stream:
-`CompositeTag = (RiskLevel * 10) + (ActionType % 10)`
-This allows the lightweight GRU to track sequences of (Risk, Action) pairs efficiently.
+**v1.2 Update (Rich Composite Structure):**
+We compress 4 dimensions into a single scalar tag for the GRU:
+`CompositeTag = (Risk * 300) + (Action * 30) + (Actor * 10) + Status`
+This allows the memory to distinguish between "Admin Success" and "User Failure" even if the action is the same.
 
 ---
 

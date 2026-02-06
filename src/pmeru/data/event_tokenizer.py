@@ -35,7 +35,7 @@ class WorkflowEvent:
         return f"[{self.step_id}] {self.actor} {self.action} {self.resource} -> {self.status} (Risk: {self.risk_score}){meta_str}\n"
 
     def to_struct_vector(self) -> List[int]:
-        # 1. Risk Level
+        # 1. Risk Level (0-3)
         if self.risk_score < 20:
             risk_tag = 0
         elif self.risk_score < 50:
@@ -48,8 +48,20 @@ class WorkflowEvent:
         # 2. Action Type (0-9)
         action_tag = hash(self.action) % 10
 
-        # v1.1 FIX: Combine Risk + Action
-        composite_tag = (risk_tag * 10) + action_tag
+        # 3. Actor (0-3)
+        actor_map = {"system": 0, "user": 1, "admin": 2}
+        actor_tag = actor_map.get(self.actor.lower().split("_")[0], 1)
+
+        # 4. Status (0-2)
+        status_map = {"SUCCESS": 0, "PENDING": 1, "FAILED": 2}
+        status_tag = status_map.get(self.status, 2)  # Default to FAILED/bad if unknown
+
+        # v1.2 RICH COMPOSITE TAG
+        # Formula: Risk(4) * 300 + Action(10) * 30 + Actor(3) * 10 + Status(3)
+        # Max Value: 3*300 + 9*30 + 2*10 + 2 = 900 + 270 + 20 + 2 = ~1200
+        composite_tag = (
+            (risk_tag * 300) + (action_tag * 30) + (actor_tag * 10) + status_tag
+        )
 
         return [composite_tag] * len(self.to_text_line())
 

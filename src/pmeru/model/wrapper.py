@@ -19,7 +19,7 @@ class PMeruConfig(PretrainedConfig):
         base_model_name="Qwen/Qwen2.5-1.5B-Instruct",
         hidden_size=1536,  # Qwen 1.5B default
         prime_mem_dim=128,
-        num_struct_tags=32,
+        num_struct_tags=1024,
         **kwargs
     ):
         super().__init__(**kwargs)
