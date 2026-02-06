@@ -55,5 +55,48 @@ class TestStructTagger(unittest.TestCase):
         )
 
 
+class TestTextStreamDataset(unittest.TestCase):
+    def setUp(self):
+        # Mock tokenizer
+        class MockTokenizer:
+            pad_token_id = 0
+            eos_token_id = 0
+
+            def __call__(self, text, add_special_tokens=False):
+                # Simple mock: 1 token per char
+                return {"input_ids": [1] * len(text)}
+
+        self.tokenizer = MockTokenizer()
+
+    def test_indent_propagation(self):
+        # Ensure indent_size passed to dataset reaches the tagger
+        from src.pmeru.data.text_stream import TextStreamDataset
+
+        # 1. Init with indent_size=2
+        ds = TextStreamDataset(
+            self.tokenizer,
+            dataset_name=None,
+            split="train",
+            struct_tag_mode="simple",
+            indent_size=2,
+        )
+        # Check internal tagger
+        self.assertEqual(
+            ds.tagger.indent_size, 2, "Dataset should pass indent_size=2 to tagger"
+        )
+
+        # 2. Init with indent_size=4
+        ds4 = TextStreamDataset(
+            self.tokenizer,
+            dataset_name=None,
+            split="train",
+            struct_tag_mode="simple",
+            indent_size=4,
+        )
+        self.assertEqual(
+            ds4.tagger.indent_size, 4, "Dataset should pass indent_size=4 to tagger"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

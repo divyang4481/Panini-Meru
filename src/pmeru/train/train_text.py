@@ -211,6 +211,7 @@ def train():
         base_model_name=args.model_name,
         hidden_size=hidden_size,
         prime_mem_dim=args.prime_dim,
+        num_struct_tags=args.max_tags,
         injection_layer_index=args.injection_layer,
     )
     model = PMeruModel(config, base_model, prime_memory, mixer)
@@ -294,8 +295,6 @@ def train():
             # --- V1.1 AUXILIARY STRUCTURAL LOSS ---
             # Predict next structural tag from Prime Memory features
             # This forces the GRU to track structure independently of the Transformer.
-
-            # 1. Aux Head is now initialized in PMeruModel.__init__ and optimized from start.
 
             # 2. Get Features
             mem_features = outputs["mem_features"]  # [B, T, PrimeDim]

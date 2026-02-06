@@ -36,16 +36,10 @@ class WorkflowEvent:
 
     def to_struct_vector(self) -> List[int]:
         """
-        Converts the event into a structural integer vector for the 'Prime Stream'.
-
-        We map semantic fields to integer tags.
-        Vector: [RISK_LEVEL, STATUS_CODE, ACTION_TYPE]
+        Converts the event into a structural integer vector.
+        v1.1 FIX: Encodes both RISK and ACTION.
         """
         # 1. Risk Level (0-3)
-        # 0-20: 0 (Safe)
-        # 21-50: 1 (Warn)
-        # 51-80: 2 (High)
-        # 81+: 3 (Critical)
         if self.risk_score < 20:
             risk_tag = 0
         elif self.risk_score < 50:
@@ -55,16 +49,11 @@ class WorkflowEvent:
         else:
             risk_tag = 3
 
-        # 2. Status Code
-        status_map = {"SUCCESS": 0, "FAILED": 1, "PENDING": 2, "DENIED": 3}
-        status_tag = status_map.get(self.status, 4)
-
-        # 3. Action Type Hash
-        # We assume action is one of N verbs. Hash it to 0-31 range.
+        # 2. Action Type (0-9) - Smaller bucket for composite
         action_tag = hash(self.action) % 10
 
-        # 4. Composite Tag
-        # Risk (0-3) * 10 + Action (0-9) = 00..39 range
+        # 3. Composite Tag: (Risk * 10) + Action
+        # Example: Risk 3 (Critical), Action 5 -> Tag 35
         composite_tag = (risk_tag * 10) + action_tag
 
         return [composite_tag] * len(self.to_text_line())
