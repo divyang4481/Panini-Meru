@@ -128,7 +128,7 @@ def train_events():
         if accelerator.sync_gradients:
             global_step += 1
             progress.update(1)
-            progress.set_postfix(loss=loss.item())
+            progress.set_postfix(loss=total_loss.item())
 
             if global_step >= args.steps:
                 break

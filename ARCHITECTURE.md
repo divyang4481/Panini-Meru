@@ -371,3 +371,92 @@ Panini-Meru’s architecture is intentionally simple where it must be:
 - **Mixer decides who wins**
 - **Training fits on 6GB via QLoRA + checkpointing**
 - **Evaluation focuses on long-horizon coherence + constraint violations**
+
+## 15) Mathematical Theory & Formalism (v1.1)
+
+This section details the formal definitions for deep fusion, state recurrence, and the auxiliary loss upgraded in v1.1.
+
+### 15.1 Notation
+
+| Symbol            | Description                                     | Dimensions                       |
+| :---------------- | :---------------------------------------------- | :------------------------------- |
+| $T$               | Sequence length                                 | Integer (e.g., 1024)             |
+| $L$               | Number of Transformer layers                    | Integer (e.g., 24 for Qwen-1.5B) |
+| $x_t$             | Input token at step $t$                         | Scalar index                     |
+| $S_t$             | Structural Tag at step $t$                      | Scalar index                     |
+| $h_{t, l}^{real}$ | Transformer hidden state at step $t$, layer $l$ | $\mathbb{R}^{d_{model}}$         |
+| $h_t^{prime}$     | Prime Stream (GRU) hidden state                 | $\mathbb{R}^{d_{prime}}$         |
+| $E_{struct}(S_t)$ | Embedding of structural tag                     | $\mathbb{R}^{d_{emb}}$           |
+| $M_t$             | Memory feature vector (projected)               | $\mathbb{R}^{d_{model}}$         |
+
+### 15.2 Deep Fusion (Mid-Layer Injection)
+
+In v1.1, we decouple the "Memory" input from the "Output" to avoid the "Lazy Bureaucrat" problem. The Prime Stream observes the **middle layer** of the Transformer, where semantic formation is mostly complete but final token selection has not occurred.
+
+Let $l_{mid} = L / 2$ (e.g., Layer 12).
+
+$$
+h_{t, l_{mid}}^{real} = \text{TransformerBlock}_{1 \dots l_{mid}}(x_{1 \dots t})
+$$
+
+The input to the Prime Stream at step $t$ combines this mid-layer state with the explicit structural tag:
+
+$$
+u_t = \text{Concat}(h_{t, l_{mid}}^{real}, E_{struct}(S_t)) \cdot W_{proj}
+$$
+
+### 15.3 The Prime Stream Recurrence
+
+The Prime Stream updates its persistent state $h_t^{prime}$ using a standard Gated Recurrent Unit (GRU):
+
+$$
+h_t^{prime} = \text{GRU}(u_t, h_{t-1}^{prime})
+$$
+
+The memory features $M_t$ are then projected back to the model dimension:
+
+$$
+M_t = h_t^{prime} \cdot W_{out}
+$$
+
+### 15.4 Gated Mixing (The "Bridge")
+
+The memory features are injected back into the Transformer's **final layer** $h_{t, L}^{real}$ to influence the actual generation. We use a **Per-Channel Gated Residual** connection.
+
+Let $g \in \mathbb{R}^{d_{model}}$ be a learnable gate vector (initialized to bias towards the Real Stream).
+
+$$
+\alpha = \sigma(g) \quad \text{(Sigmoid activation)}
+$$
+
+$$
+h_{t, mixed}^{real} = \text{LayerNorm}( h_{t, L}^{real} + \alpha \odot M_t )
+$$
+
+The final logits are computed from this mixed state:
+
+$$
+P(x_{t+1} | x_{1 \dots t}) = \text{Softmax}(\text{LM\_Head}(h_{t, mixed}^{real}))
+$$
+
+### 15.5 Auxiliary Structural Objective
+
+To prevent the "Lazy Bureaucrat" (where $g \to -\infty$ and the GRU is ignored), we enforce an auxiliary loss. The Prime Stream **must** be able to predict the _next_ structural tag $S_{t+1}$ using _only_ its own state.
+
+$$
+\hat{y}_{struct} = \text{StructHead}(h_t^{prime})
+$$
+
+$$
+\mathcal{L}_{struct} = \text{CrossEntropy}(\hat{y}_{struct}, S_{t+1})
+$$
+
+### 15.6 Total Loss Function
+
+The final training objective combines the standard Next-Token Prediction loss ($\mathcal{L}_{LM}$) with the Structural Auxiliary loss:
+
+$$
+\mathcal{L}_{total} = \mathcal{L}_{LM} + \lambda \cdot \mathcal{L}_{struct}
+$$
+
+Where $\lambda$ (e.g., 0.5) controls the "responsibility" weight of the Prime Stream.
