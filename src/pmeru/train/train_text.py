@@ -131,6 +131,13 @@ def train():
         help="Force scalar gating (backward compatibility).",
     )
 
+    parser.add_argument(
+        "--injection_layer",
+        type=int,
+        default=12,
+        help="Layer index to inject Prime Memory (v1.1 Deep Fusion)",
+    )
+
     args = parser.parse_args()
 
     set_seed(42)
@@ -202,6 +209,7 @@ def train():
         base_model_name=args.model_name,
         hidden_size=hidden_size,
         prime_mem_dim=args.prime_dim,
+        injection_layer_index=args.injection_layer,
     )
     model = PMeruModel(config, base_model, prime_memory, mixer)
 
@@ -285,7 +293,6 @@ def train():
             # Predict next structural tag from Prime Memory features
             # This forces the GRU to track structure independently of the Transformer.
 
-            # 1. Initialize Head (Lazy Init on first forward to match device/dtype)
             # 1. Aux Head is now initialized in PMeruModel.__init__ and optimized from start.
 
             # 2. Get Features

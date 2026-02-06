@@ -59,19 +59,15 @@ class WorkflowEvent:
         status_map = {"SUCCESS": 0, "FAILED": 1, "PENDING": 2, "DENIED": 3}
         status_tag = status_map.get(self.status, 4)
 
-        # 3. Action Type Hash (Simple bucketing for demo)
+        # 3. Action Type Hash
         # We assume action is one of N verbs. Hash it to 0-31 range.
-        action_tag = hash(self.action) % 32
+        action_tag = hash(self.action) % 10
 
-        # Return composite list.
-        # Note: The current model arg 'struct_tags' expects a single integer sequence [T].
-        # We might flatten this or use just the most critical tag (RISK) for the sequence.
-        # Alternatively, we interleave them or sum them?
-        # For v1 compliance, let's return the Risk Level as the primary structural tag.
+        # 4. Composite Tag
+        # Risk (0-3) * 10 + Action (0-9) = 00..39 range
+        composite_tag = (risk_tag * 10) + action_tag
 
-        return [risk_tag] * len(self.to_text_line())
-        # We replicate the tag for the length of the line so it aligns character-wise
-        # with the text representation.
+        return [composite_tag] * len(self.to_text_line())
 
 
 class EventTokenizer:

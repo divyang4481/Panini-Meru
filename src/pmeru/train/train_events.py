@@ -72,7 +72,9 @@ def train_events():
     prime_mem = PrimeMemorySeq(hidden_size, args.prime_dim).cuda()
     mixer = GateMixer(hidden_size, per_channel=args.per_channel_gating).cuda()
 
-    config = PMeruConfig(args.model_name, hidden_size, args.prime_dim)
+    config = PMeruConfig(
+        args.model_name, hidden_size, args.prime_dim, num_struct_tags=40
+    )
     model = PMeruModel(config, model_base, prime_mem, mixer)
 
     # 3. Optimizer
@@ -108,7 +110,7 @@ def train_events():
             tag_logits = model.struct_head(shift_mem)
             loss_fct_struct = torch.nn.CrossEntropyLoss()
 
-            struct_loss = loss_fct_struct(tag_logits.view(-1, 32), shift_tags.view(-1))
+            struct_loss = loss_fct_struct(tag_logits.view(-1, 40), shift_tags.view(-1))
 
             # Loss Weight 0.5 hardcoded for events for now
             total_loss = lm_loss + (0.5 * struct_loss)
