@@ -97,15 +97,7 @@ def train_events():
             lm_loss = out["loss"]
 
             # --- V1.1 AUX Loss ---
-            if not hasattr(model, "struct_head"):
-                # Use max_tags from implicit knowledge or arg (event vocab is small, usually <32)
-                # EventTokenizer produces tags based on risk scores (0..4)
-                # Let's assume max tags 32 to be safe for now, or match EventTokenizer
-                model.struct_head = torch.nn.Linear(args.prime_dim, 32).to(
-                    accelerator.device
-                )
-                accelerator.register_for_checkpointing(model.struct_head)
-                optimizer.add_param_group({"params": model.struct_head.parameters()})
+            # 1. Aux Head initialized in model.__init__
 
             mem_features = out["mem_features"]
             struct_tags = batch["struct_tags"]

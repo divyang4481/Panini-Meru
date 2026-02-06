@@ -62,54 +62,7 @@ def get_dataset_and_loader(args, tokenizer, accelerator, current_step=0):
         # Configurable dataset options:
         struct_tag_mode=args.struct_tag_mode,
         text_column=args.text_column,
-    )
-    # Note: We rely on TextStreamDataset default tagger config or kwargs if we updated it.
-    # To fully support indent_size, we need to update TextStreamDataset to accept kwargs or arg.
-    # We missed adding indent_size to TextStreamDataset __init__?
-    # Let's assume TextStreamDataset has been updated or will support kwargs?
-    # Actually, let's Check text_stream.py. It has:
-    # def __init__(..., struct_tag_mode="simple", text_column="text", ...)
-    # but NOT indent_size. We should fix that or pass tagger directly?
-
-    # We will assume TextStreamDataset creates its own tagger.
-    # If we want to set indent_size, we might need to modify TextStreamDataset to accept it,
-    # OR inject the tagger.
-    # For now, let's stick to the args TextStreamDataset DEFINITELY has.
-
-    dataloader = DataLoader(dataset, batch_size=args.batch_size)
-    dataloader = accelerator.prepare(dataloader)
-
-    return dataloader
-
-
-def train():
-    parser = argparse.ArgumentParser()
-    # (Args are defined above in previous chunks, parser logic is preserved)
-    parser.add_argument("--run_name", type=str, default="default_run")
-    parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-1.5B-Instruct")
-    # ... (other args handled by existing code we are not editing) ...
-
-    # We need to grab only the args we added or existing checks...
-    # Wait, replace_file_content replaces the BLOCK.
-    # If we are effectively rewriting 'train()' partly, we need to be careful.
-    pass  # Pseudo-code marker
-
-    # Correct Replacement Strategy:
-    # Replace lines 46-69 (get_dataset_and_loader)
-    # AND lines 185-198 (Prime/Mixer init)
-
-    # Let's do get_dataset_and_loader first.
-
-    dataset = TextStreamDataset(
-        tokenizer,
-        dataset_name=args.dataset_name,
-        dataset_config=args.dataset_config,
-        split="train",
-        seq_len=args.seq_len,
-        skip_batches=skip_batches,
-        struct_tag_mode=args.struct_tag_mode,
-        text_column=args.text_column,
-        # TODO: update TextStreamDataset to take indent_size if needed.
+        indent_size=args.indent_size,
     )
 
     dataloader = DataLoader(dataset, batch_size=args.batch_size)
@@ -257,6 +210,7 @@ def train():
         *filter(lambda p: p.requires_grad, model.base_model.parameters()),
         *model.prime_memory.parameters(),
         *model.mixer.parameters(),
+        *model.struct_head.parameters(),
     ]
     optimizer = torch.optim.AdamW(trainable_params, lr=2e-4)
 
@@ -332,20 +286,7 @@ def train():
             # This forces the GRU to track structure independently of the Transformer.
 
             # 1. Initialize Head (Lazy Init on first forward to match device/dtype)
-            if not hasattr(model, "struct_head"):
-                # Simple linear probe: PrimeDim -> NumTags (32 default)
-                model.struct_head = torch.nn.Linear(args.prime_dim, args.max_tags).to(
-                    accelerator.device
-                )
-                # Register as module to be optimized?
-                # Ideally should be in model.__init__, but we do it here for script agility.
-                # We must ensure optimizer sees it.
-                # LIMITATION: If we init here, optimizer doesn't know about it unless we re-add params.
-                # BETTER: Add to model init or hack-add to optimizer groups.
-                # For this script, let's assuming we MUST handle optimization:
-                accelerator.register_for_checkpointing(model.struct_head)
-                optimizer.add_param_group({"params": model.struct_head.parameters()})
-                logger.info("Initialized Auxiliary Structure Head")
+            # 1. Aux Head is now initialized in PMeruModel.__init__ and optimized from start.
 
             # 2. Get Features
             mem_features = outputs["mem_features"]  # [B, T, PrimeDim]

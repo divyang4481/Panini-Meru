@@ -77,6 +77,10 @@ class PMeruModel(nn.Module):
                 "WARNING: Could not identify final normalization layer. Mixing might occur post-norm or require manual handling."
             )
 
+        # 3. Aux Structure Head (v1.1)
+        # Persistent head for auxiliary loss and structure prediction.
+        self.struct_head = nn.Linear(config.prime_mem_dim, config.num_struct_tags)
+
     def forward(
         self,
         input_ids=None,
@@ -165,3 +169,73 @@ class PMeruModel(nn.Module):
             "prime_state": new_prime_state,
             "mem_features": raw_mem_features,  # Return RAW GRU features (128 dim) for Aux Loss
         }
+
+    @torch.no_grad()
+    def generate_with_state(
+        self,
+        input_ids,
+        struct_tags=None,
+        prime_state=None,
+        max_new_tokens=50,
+        temperature=0.7,
+        do_sample=True,
+    ):
+        """
+        Custom generation loop that maintains Prime Memory state.
+
+        Args:
+            input_ids: [B, T] Initial prompt
+            struct_tags: [B, T] Initial structure tags
+            prime_state: [1, B, PrimeDim] Initial memory state
+
+        Returns:
+            full_ids: [B, T + max_new_tokens]
+        """
+        self.eval()
+        curr_ids = input_ids
+        curr_state = prime_state
+
+        # If no struct tags provided, use zeros
+        if struct_tags is None:
+            struct_tags = torch.zeros_like(input_ids)
+
+        curr_tags = struct_tags
+
+        for _ in range(max_new_tokens):
+            # Forward pass
+            outputs = self.forward(
+                input_ids=curr_ids, struct_tags=curr_tags, prime_state=curr_state
+            )
+
+            next_token_logits = outputs["logits"][:, -1, :]
+            curr_state = outputs["prime_state"]  # Update persistent state
+
+            # Decode
+            if do_sample:
+                probs = torch.softmax(next_token_logits / temperature, dim=-1)
+                next_token = torch.multinomial(probs, num_samples=1)
+            else:
+                next_token = torch.argmax(next_token_logits, dim=-1, keepdim=True)
+
+            # Append
+            curr_ids = torch.cat([curr_ids, next_token], dim=1)
+
+            # Extend tags (naive: repeat 0 or predicted tag? For now 0)
+            # Ideally use struct_head to predict next tag!
+            # Let's try to use struct_head if available
+            next_tag_val = 0
+            if hasattr(self, "struct_head"):
+                # Predict next tag from memory
+                # mem_features is [B, T, PrimeDim]
+                mem_feat = outputs["mem_features"][:, -1:, :]  # Last step
+                tag_logits = self.struct_head(mem_feat)
+                next_tag_val = torch.argmax(tag_logits, dim=-1)
+                next_tag = next_tag_val  # [B, 1]
+            else:
+                next_tag = torch.zeros(
+                    (curr_ids.shape[0], 1), dtype=torch.long, device=curr_ids.device
+                )
+
+            curr_tags = torch.cat([curr_tags, next_tag], dim=1)
+
+        return curr_ids
