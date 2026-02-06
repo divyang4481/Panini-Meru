@@ -88,6 +88,8 @@ class PMeruModel(nn.Module):
         struct_tags=None,
         prime_state=None,
         labels=None,
+        use_cache=None,
+        past_key_values=None,
         **kwargs
     ):
         """
@@ -109,6 +111,8 @@ class PMeruModel(nn.Module):
         outputs = self.base_model(
             input_ids=input_ids,
             attention_mask=attention_mask,
+            past_key_values=past_key_values,
+            use_cache=use_cache,
             output_hidden_states=True,
             return_dict=True,
             **kwargs
