@@ -2,20 +2,43 @@ import re
 
 
 class StructTagger:
-    def __init__(self, max_tags=32):
+    """
+    Computes structural depth tags for source code.
+
+    The tag at each character represents the 'Composite Depth':
+        Tag = IndentationDepth + BracketNestingDepth
+
+    Example:
+        def foo():          # Indent 0, Bracket 0 -> Tag 0
+            if (x):         # Indent 1, Bracket 1 (inside parens) -> Tag 2
+                return      # Indent 2 -> Tag 2
+
+    This helps the Prime Stream (GRU) track scope even if tokens are lost.
+    """
+
+    def __init__(
+        self, max_tags=32, indent_size=4, open_brackets="([{", close_brackets=")]}"
+    ):
+        """
+        Args:
+            max_tags (int): Maximum tag ID (tags will be clamped to max_tags - 1).
+            indent_size (int): Number of spaces that constitute one indentation level.
+            open_brackets (str): Characters that increment depth.
+            close_brackets (str): Characters that decrement depth.
+        """
         self.max_tags = max_tags
-        # We reserve tags 0-31 for depth.
-        # Tag 0: Top level
-        # Tag N: Depth N
+        self.indent_size = indent_size
+        self.open_set = set(open_brackets)
+        self.close_set = set(close_brackets)
 
     def normalize_tags(self, text: str):
         """
-        Generates character-level structural tags based on:
-        1. Line Indentation (Python style: 4 spaces = 1 level)
-        2. Bracket Nesting (([{...}]))
+        Generates character-level structural tags.
 
-        Tag[i] = IndentLevel(line) + BracketDepth(char_i)
-        clamped to max_tags-1.
+        Algorithm:
+        1. Parse line indentation (spaces/tabs converted to levels).
+        2. Walk characters, updating bracket depth.
+        3. Sum Indent + Bracket and clamp.
         """
         char_tags = []
         bracket_depth = 0
@@ -24,36 +47,32 @@ class StructTagger:
 
         for line in lines:
             # 1. Calculate Indentation Level for this line
-            # Count leading spaces
             leading_spaces = 0
             for char in line:
                 if char == " ":
                     leading_spaces += 1
                 elif char == "\t":
-                    leading_spaces += 4  # Assume tab=4 spaces
+                    # Assume tab brings us to the next multiple of indent_size
+                    # Standard assumption: tabs align to indent_size (often 4)
+                    leading_spaces += self.indent_size
                 else:
                     break
 
-            indent_level = leading_spaces // 4
+            indent_level = leading_spaces // self.indent_size
 
             # 2. Process chars
             for char in line:
-                if char in "([{":
+                if char in self.open_set:
                     bracket_depth += 1
-                elif char in ")]}":
+                elif char in self.close_set:
                     bracket_depth = max(0, bracket_depth - 1)
 
                 # Composite Depth
-                # We want the tag to reflect "Where am I in the structure?"
-                # Total Depth = Indent + Brackets
                 total_depth = indent_level + bracket_depth
 
                 # Clamp
                 tag = min(total_depth, self.max_tags - 1)
                 char_tags.append(tag)
-
-        # Handle case where splitlines missed the trailing EOF if no newline?
-        # Python splitlines(keepends=True) usually handles it well.
 
         return char_tags
 
